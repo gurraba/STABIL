@@ -1,0 +1,296 @@
+#include <Arduino.h>
+#include "Adafruit_Sensor.h"
+#include "Adafruit_MPU6050.h"
+#include <Wire.h>
+#include <math.h>
+#include <esp_now.h>
+#include <WiFi.h>
+
+
+// definitions for the stepper motors
+#define STEPPER1_DIR_PIN 18
+#define STEPPER1_STEP_PIN 23
+#define STEPPER2_DIR_PIN 17
+#define STEPPER2_STEP_PIN 5
+
+// definitions for the MPU6050
+#define MPU6050_SDA 21
+#define MPU6050_SCL 22
+
+// create the MPU6050
+Adafruit_MPU6050 mpu;
+int16_t accY, accZ;
+int16_t gyroX, gyroY, gyroZ;
+float accAngle;
+float gyroAngle;
+
+int current_time = 0;
+int previous_time = 0;
+int loop_time = 0;
+
+float current_angle = 0;
+float desired_angle = 0;
+
+float recieved_angle_deviation = 0;
+float recieved_turn = 0;
+float previous_recieved_angle_deviation = 0;
+
+
+float average_error_difference = 0;
+float error = 0;
+float previous_error = 0;
+int accumulated_error = 0;
+float p = 0;
+float i = 0;
+float d = 0;
+
+float PID = 0;
+int speed = 1000000;
+int previous_speed = 1000000;
+int counter = 0; 
+
+bool turn1 = false;
+bool turn2 = false;
+int turncounter = 0;
+
+int max_speed_counter = 0;
+bool fell = false;
+
+sensors_event_t a, g, temp;
+hw_timer_s *timer1 = NULL;
+
+// turning works by skipping every N steps in one of the motor
+// N is the value recieved from the remote control
+// the turncounter is used to keep track of the steps
+// when the turncounter reaches the value recieved from the remote control, the other motor skips a step
+void IRAM_ATTR drivemotor()
+{
+  if(!turn1){
+  digitalWrite(STEPPER1_STEP_PIN, HIGH);
+  digitalWrite(STEPPER1_STEP_PIN, LOW);
+  }
+  if(!turn2){
+  digitalWrite(STEPPER2_STEP_PIN, HIGH);
+  digitalWrite(STEPPER2_STEP_PIN, LOW);
+  }
+
+}
+
+// ESPNOW SETUP ########################################
+typedef struct struct_message {
+  int move;
+  int turn;
+} struct_message;
+
+// Create a struct_message called myData
+struct_message myData;
+
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&myData, incomingData, sizeof(myData));
+  recieved_angle_deviation = myData.move;
+  recieved_turn = myData.turn;
+}
+ 
+
+void setup()
+{
+  Serial.begin(115200);
+  
+  // Set device as a Wi-Fi Station
+  WiFi.mode(WIFI_STA);
+
+  // Init ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  // Once ESPNow is successfully Init, we will register for recv CB to
+  // get recv packer info
+  esp_now_register_recv_cb(OnDataRecv);
+
+
+  timer1 = timerBegin(0, 80, true);
+  timerAlarmEnable(timer1);
+  timerAttachInterrupt(timer1, &drivemotor, true);
+
+
+  pinMode(STEPPER1_DIR_PIN, OUTPUT);
+  pinMode(STEPPER1_STEP_PIN, OUTPUT);
+  pinMode(STEPPER2_DIR_PIN, OUTPUT);
+  pinMode(STEPPER2_STEP_PIN, OUTPUT);
+
+
+  // initialize the MPU6050 ########################################
+  
+  while (!Serial)
+    delay(10); 
+
+  // Try to initialize!
+  if (!mpu.begin())
+  {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1)
+    {
+      delay(10);
+    }
+  }
+  Serial.println("MPU6050 Found!");
+
+  mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
+  mpu.setMotionDetectionDuration(0);
+  mpu.setInterruptPinLatch(true); // Keep it latched.  Will turn off when reinitialized.
+  mpu.setInterruptPinPolarity(true);
+  mpu.setMotionInterrupt(false);
+
+  Wire.write(0);
+  Serial.println("");
+
+  // CALINRATION SEQUENCE FOR FINDING THE ANGLE ###########################
+  // sample accelerometer twice and average the values to reduce noise
+  delay(2000);
+  mpu.getEvent(&a, &g, &temp);
+  desired_angle = atan2(a.acceleration.y, a.acceleration.z) * RAD_TO_DEG;
+  current_angle = desired_angle;
+  delay(1000);
+  mpu.getEvent(&a, &g, &temp);
+  desired_angle = atan2(a.acceleration.y, a.acceleration.z) * RAD_TO_DEG;
+  Serial.println(current_angle-desired_angle);
+  desired_angle = (current_angle + desired_angle) / 2;
+  previous_time = micros();
+}
+
+
+void loop()
+{
+
+  current_time = micros();
+  loop_time = current_time - previous_time;
+  previous_time = current_time;
+
+  // GET DATA FROM MPU6050 ########################################
+  // first, accelerometer angle
+  mpu.getEvent(&a, &g, &temp);
+  // use atan2 to get the angle of the device
+  accAngle = atan2(a.acceleration.y, a.acceleration.z) * RAD_TO_DEG;
+  // then, gyro angle
+  gyroX = g.gyro.x * RAD_TO_DEG;
+
+  gyroAngle = (float)gyroX * loop_time / 1000000;
+  current_angle = 0.98 * (current_angle + gyroAngle) + 0.02 * accAngle;
+
+
+  // CONTROL ALGORITHM ######################################## 
+
+  // Angles from remote control
+  //checks and balances for the angles
+
+
+  //put a lowpass filter on the recieved angle as to not make sudden adjustments
+ 
+ 
+  if(recieved_angle_deviation != 0){
+    recieved_angle_deviation = 0.05*recieved_angle_deviation + 0.95*previous_recieved_angle_deviation;
+  }else{
+    recieved_angle_deviation = 0.1*recieved_angle_deviation + 0.9*previous_recieved_angle_deviation;
+    if(abs(recieved_angle_deviation) < 0.1){
+      recieved_angle_deviation = 0;
+    }
+  }
+
+  
+
+  //desired angle is the sum of the recieved angle and the deviation
+  error = desired_angle - current_angle + recieved_angle_deviation;
+
+
+
+  previous_recieved_angle_deviation = recieved_angle_deviation;
+
+  //derivative term. average it over 10 iterations to reduce noise
+  if(counter < 10){
+    average_error_difference = average_error_difference + (error - previous_error)/10;
+    counter++;
+  }
+  else{
+    d = (average_error_difference) * 40;
+    counter = 0;
+  }
+
+  p = error * 150;
+  accumulated_error = accumulated_error + error;
+  i = accumulated_error * 0.0026*3000; //0.0026 is the loop time in seconds
+  previous_error = error;
+  PID = p+d+i;
+  // make the PID response linear since a one ms change at a 2 ms speed will double the speed, compared to at 100 ms,
+  // where it's only a 2% increase
+
+  // #######################################################################
+
+  speed = 1000000*(1/(abs(PID)+1));
+  
+  if (speed < 200){
+    speed = 200;
+    max_speed_counter++;
+  }
+  if (speed > 1000){
+    max_speed_counter = 0;
+  }
+
+  speed = 0.1*speed + 0.9*previous_speed;
+
+  turn1 = false;
+  turn2 = false;
+  
+  if (recieved_turn > 0) {
+      if (turncounter >= 24 - recieved_turn) {  // Using >= for safety
+          turn2 = true;
+          turncounter = 0;
+      }
+  } else if (recieved_turn < 0) {
+      if (turncounter >= 24 - abs(recieved_turn)) {  // Ensure proper thresholding
+          turn1 = true;
+          turncounter = 0;
+      }
+  }
+  turncounter++;
+
+
+  
+  // we remove the I term if the robot is standing up since it is now radio controlled
+  if(abs(error) > 0.2){
+    i = 0;
+  }
+
+
+
+  if(abs(error) > 35 || max_speed_counter > 100){
+    timerAlarmDisable(timer1);
+    fell = true;
+    accumulated_error = 0;
+    average_error_difference = 0;
+    previous_speed = 0;
+    p = 0;
+    i = 0;
+    d = 0;
+    max_speed_counter = 0;  
+  }
+  else{
+    timerAlarmWrite(timer1, speed, true);
+    timerAlarmEnable(timer1);
+    fell = false;
+  }
+  
+  previous_speed = speed;
+
+  if(PID > 0 && !fell){
+    digitalWrite(STEPPER1_DIR_PIN, HIGH);
+    digitalWrite(STEPPER2_DIR_PIN, LOW);
+  
+  }
+  else if(PID < 0 && !fell){
+    digitalWrite(STEPPER1_DIR_PIN, LOW);
+    digitalWrite(STEPPER2_DIR_PIN, HIGH);
+
+  }
+
+}
