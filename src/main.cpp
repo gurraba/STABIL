@@ -136,17 +136,17 @@ void kalmansetup() {
   kalman.Q << 
     1,    0,      0,      0,
     0,   1,      0,      0,
-    0,   0,      0.4,     0,
+    0,   0,      0.3,     0,
     0,    0,     0,    0.1;
 
   // 5) Measurement noisse covariance R (based on your IMU specs)
   //    First row = variance of θ_acc (converted from m/s² noise via small‐angle)
   //    Second row = variance of gyro-rate
   kalman.R << 
-    0.01,  0,    0,       0,
-    0,    0.3,    0,        0,
+    0.001,  0,    0,       0,
+    0,    0.01,    0,        0,
     0,    0,     0.03,    0,
-    0,    0,      0,     0.08;
+    0,    0,      0,     0.06;
 
 
 
@@ -192,14 +192,14 @@ void LQRsetup() {
 
 
   LQRController.Q << 
-    0.07,    0,        0,      0,    
-    0,      0.1,      0,      0,    
+    0.08,    0,        0,      0,    
+    0,      0.08,      0,      0,    
     0,        0,      100,      0,    
-    0,         0,       0,      0.01; //<- integral action
+    0,         0,       0,      0.01;
 
 
   LQRController.R << 
-    0.025; // Control cost weighting matrix
+    0.03; // Control cost weighting matrix
 
   LQRController.discretize_state_matricies(SAMPLE_TIME);
 
@@ -357,7 +357,7 @@ void loop()
 
 
 
-  if(abs(current_angle) > 40){ // fall detection
+  if(abs(current_angle) > 35){ // fall detection
     fell = true;
     digitalWrite(STEPPER1_ENABLE_PIN, HIGH); // enable the stepper motors
     digitalWrite(STEPPER2_ENABLE_PIN, HIGH);
