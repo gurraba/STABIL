@@ -15,7 +15,7 @@ made during this project, for the specific purpose of this self balancing robot,
 
 **kalmanfilter.h** contains not code for implementing a kalman filter, but also low pass filters, PID controllers and LOR controllers. 
 
-**CAD files**
+CAD files may be available in the future.
   
 ## Specific challenges
 This robot utilizes stepper motors. This adds quite a bit of complexity and annoyance due to the nature of how stepper motors are controlled.
